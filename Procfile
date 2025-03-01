@@ -1,0 +1,1 @@
+web: cd /app/publish && dotnet Web.dll

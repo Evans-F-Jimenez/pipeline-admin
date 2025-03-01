@@ -1,0 +1,10 @@
+[build]
+builder = "NIXPACKS"
+
+[deploy]
+startCommand = "dotnet run --project src/Web/Web.csproj"
+healthcheckPath = "/health"
+healthcheckTimeout = 300
+
+[nixpacks]
+dotnet-version = "8.0"  # Usar una versión estable de .NET

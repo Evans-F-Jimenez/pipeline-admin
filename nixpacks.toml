@@ -1,0 +1,12 @@
+[phases.setup]
+nixPkgs = ["dotnet-sdk_8_0"]
+
+[phases.build]
+cmds = [
+  "dotnet restore pipeline.sln",
+  "dotnet build pipeline.sln -c Release --no-restore",
+  "dotnet publish src/Web/Web.csproj -c Release -o /app/publish --no-restore"
+]
+
+[start]
+cmd = "cd /app/publish && dotnet Web.dll"
