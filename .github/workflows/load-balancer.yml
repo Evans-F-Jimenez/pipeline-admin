@@ -1,0 +1,185 @@
+name: Build and Deploy with Load Balancer
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master, develop ]
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/pipeline-web:latest
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      # Copiar el script de configuración del proxy al repositorio
+      - name: Create proxy configuration script
+        run: |
+          cat > configure-proxy.js << 'EOL'
+          const axios = require('axios');
+
+          // Esperar a que el proxy manager esté disponible
+          async function waitForProxyManager() {
+            let retries = 20;
+            while (retries > 0) {
+              try {
+                await axios.get('http://localhost:81/api/tokens');
+                console.log('Proxy Manager API disponible');
+                return true;
+              } catch (error) {
+                console.log(`Esperando a que Proxy Manager esté disponible... intentos restantes: ${retries}`);
+                retries--;
+                await new Promise(resolve => setTimeout(resolve, 5000));
+              }
+            }
+            return false;
+          }
+
+          // Obtener token de autenticación
+          async function getAuthToken() {
+            try {
+              const response = await axios.post('http://localhost:81/api/tokens', {
+                identity: 'admin@example.com',  // Usuario por defecto
+                secret: 'changeme'              // Contraseña por defecto
+              });
+              return response.data.token;
+            } catch (error) {
+              console.error('Error al autenticar:', error.message);
+              throw error;
+            }
+          }
+
+          // Configurar el balanceador de carga
+          async function setupLoadBalancer(token) {
+            try {
+              // Verificar si ya existe el proxy host
+              const existingProxies = await axios.get('http://localhost:81/api/nginx/proxy-hosts', {
+                headers: { 'Authorization': `Bearer ${token}` }
+              });
+              
+              // Si ya existe un proxy con el dominio deseado, no crear uno nuevo
+              if (existingProxies.data.some(proxy => proxy.domain_names.includes('app.example.com'))) {
+                console.log('El proxy ya existe, actualizando...');
+                return;
+              }
+              
+              // Configuración del proxy con balanceo de carga
+              const proxyConfig = {
+                domain_names: ['app.example.com'],
+                forward_scheme: 'http',
+                forward_host: 'web1',
+                forward_port: 80,
+                access_list_id: 0,
+                certificate_id: 0,
+                meta: {
+                  letsencrypt_agree: false,
+                  dns_challenge: false
+                },
+                advanced_config: 'proxy_pass http://webapp_upstream;\nupstream webapp_upstream {\n  server web1:80;\n  server web2:80;\n}\n',
+                block_exploits: true,
+                caching_enabled: false,
+                allow_websocket_upgrade: true,
+                http2_support: false,
+                hsts_enabled: false,
+                hsts_subdomains: false
+              };
+              
+              await axios.post('http://localhost:81/api/nginx/proxy-hosts', proxyConfig, {
+                headers: { 'Authorization': `Bearer ${token}` }
+              });
+              
+              console.log('Balanceador de carga configurado correctamente');
+            } catch (error) {
+              console.error('Error al configurar el balanceador:', error.message);
+              throw error;
+            }
+          }
+
+          // Función principal
+          async function main() {
+            try {
+              // Esperar a que el Proxy Manager esté disponible
+              const isAvailable = await waitForProxyManager();
+              if (!isAvailable) {
+                console.error('Proxy Manager no está disponible después de varios intentos');
+                process.exit(1);
+              }
+              
+              // Obtener token y configurar
+              const token = await getAuthToken();
+              await setupLoadBalancer(token);
+              console.log('Configuración completada con éxito');
+            } catch (error) {
+              console.error('Error en la configuración:', error);
+              process.exit(1);
+            }
+          }
+
+          main();
+          EOL
+          npm init -y
+          npm install axios
+
+      - name: Deploy to server
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            cd /path/to/deployment
+            
+            # Desplegar los servicios con docker-compose
+            docker-compose pull
+            docker-compose up -d --scale web=2
+            
+            # Verificar que docker-compose.yml tiene el servicio de proxy-manager
+            if grep -q "proxy-manager" docker-compose.yml; then
+              echo "Proxy Manager configurado en docker-compose.yml"
+            else
+              echo "ADVERTENCIA: No se encontró el servicio proxy-manager en docker-compose.yml"
+              exit 1
+            fi
+            
+            # Esperar a que los servicios estén disponibles
+            echo "Esperando a que los servicios estén listos..."
+            sleep 30
+            
+            # Copiar y ejecutar el script de configuración
+            mkdir -p proxy-config
+            cat > proxy-config/configure-proxy.js << 'EOL'
+            // Contenido del script generado en el paso anterior
+            EOL
+            
+            # Instalar dependencias y ejecutar el script
+            cd proxy-config
+            npm init -y
+            npm install axios
+            node configure-proxy.js
+            
+            echo "Despliegue completado con balanceo de carga configurado"

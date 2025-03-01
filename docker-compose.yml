@@ -1,0 +1,71 @@
+version: '3.8'
+
+services:
+  # Base de datos SQL Server
+  db:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      SA_PASSWORD: "YourStrong!Passw0rd"
+      ACCEPT_EULA: "Y"
+    ports:
+      - "1433:1433"
+    volumes:
+      - sqldata:/var/opt/mssql
+    networks:
+      - pipeline-network
+    healthcheck:
+      test: /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P "YourStrong!Passw0rd" -Q "SELECT 1" -b -o /dev/null
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  # Aplicación web (múltiples instancias para balanceo de carga)
+  web1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ConnectionStrings__DefaultConnection=Server=db;Database=pipeline;User=sa;Password=YourStrong!Passw0rd;TrustServerCertificate=True
+    networks:
+      - pipeline-network
+    restart: always
+
+  web2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ConnectionStrings__DefaultConnection=Server=db;Database=pipeline;User=sa;Password=YourStrong!Passw0rd;TrustServerCertificate=True
+    networks:
+      - pipeline-network
+    restart: always
+
+  # Nginx Proxy Manager para balanceo de carga
+  proxy-manager:
+    image: 'jc21/nginx-proxy-manager:latest'
+    ports:
+      - '80:80'   # HTTP
+      - '443:443' # HTTPS
+      - '81:81'   # Admin UI
+    volumes:
+      - ./data:/data
+      - ./letsencrypt:/etc/letsencrypt
+    networks:
+      - pipeline-network
+    restart: always
+
+networks:
+  pipeline-network:
+    driver: bridge
+
+volumes:
+  sqldata:
