@@ -6,9 +6,11 @@ on:
     branches:
       - develop
       - feature/*
+      - test
   push:
     branches:
       - develop
+      - test
 
 # Set up permissions for deploying with secretless Azure federated credentials
 permissions:
