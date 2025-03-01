@@ -2,7 +2,9 @@
 builder = "NIXPACKS"
 
 [deploy]
-startCommand = "dotnet run --project src/Web/Web.csproj"
+numReplicas = 2
+restartPolicyType = "ON_FAILURE"
 
-[nixpacks]
-dotnet-version = "8.0"  # Usar una versión estable de .NET
+[variables]
+NIXPACKS_PKGS = "dotnet-sdk_8_0 nodejs"
+ASPNETCORE_ENVIRONMENT = "Production"

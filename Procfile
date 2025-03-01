@@ -1,1 +1,1 @@
-web: cd /app/publish && dotnet Web.dll
+web: cd src/Web && dotnet run --no-build
