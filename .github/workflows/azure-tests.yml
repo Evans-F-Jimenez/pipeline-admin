@@ -1,0 +1,75 @@
+name: Test Environment Deployment
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - develop
+      - feature/*
+      - test
+  push:
+    branches:
+      - develop
+      - test
+
+# Set up permissions for deploying with secretless Azure federated credentials
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    environment: test
+    env:
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      AZURE_ENV_NAME: test-${{ vars.AZURE_ENV_NAME }}
+      AZURE_LOCATION: ${{ vars.AZURE_LOCATION }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install azd
+        uses: Azure/setup-azd@v1.0.0
+
+      - name: Install .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: 'global.json'
+      
+      - name: Run Tests
+        run: |
+          # Add your test commands here
+          # Example: dotnet test --configuration Release
+      
+      - name: Log in with Azure (Federated Credentials)
+        if: ${{ env.AZURE_CLIENT_ID != '' }}
+        run: |
+          azd auth login `
+            --client-id "$Env:AZURE_CLIENT_ID" `
+            --federated-credential-provider "github" `
+            --tenant-id "$Env:AZURE_TENANT_ID"
+        shell: pwsh
+      
+      - name: Log in with Azure (Client Credentials)
+        if: ${{ env.AZURE_CREDENTIALS != '' }}
+        run: |
+          $info = $Env:AZURE_CREDENTIALS | ConvertFrom-Json -AsHashtable;
+          Write-Host "::add-mask::$($info.clientSecret)"
+          azd auth login `
+            --client-id "$($info.clientId)" `
+            --client-secret "$($info.clientSecret)" `
+            --tenant-id "$($info.tenantId)"
+        shell: pwsh
+        env:
+          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+      
+      - name: Provision Test Infrastructure
+        run: azd provision --no-prompt --environment test
+        env:
+          AZD_INITIAL_ENVIRONMENT_CONFIG: ${{ secrets.AZD_TEST_ENVIRONMENT_CONFIG }}
+      
+      - name: Deploy Application to Test
+        run: azd deploy --no-prompt --environment test

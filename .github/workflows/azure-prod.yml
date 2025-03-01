@@ -1,0 +1,87 @@
+name: Production Deployment
+
+on:
+  workflow_dispatch:  # Manual trigger with approval
+  push:
+    branches:
+      - main
+      - master
+      - prod
+    tags:
+      - 'v*.*.*'  # Production deployments on version tags
+
+# Set up permissions for deploying with secretless Azure federated credentials
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy-production:
+    runs-on: ubuntu-latest
+    environment: production  # This enables required approvals in GitHub
+    env:
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      AZURE_ENV_NAME: prod-${{ vars.AZURE_ENV_NAME }}
+      AZURE_LOCATION: ${{ vars.AZURE_LOCATION }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install azd
+        uses: Azure/setup-azd@v1.0.0
+
+      - name: Install .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: 'global.json'
+      
+      - name: Log in with Azure (Federated Credentials)
+        if: ${{ env.AZURE_CLIENT_ID != '' }}
+        run: |
+          azd auth login `
+            --client-id "$Env:AZURE_CLIENT_ID" `
+            --federated-credential-provider "github" `
+            --tenant-id "$Env:AZURE_TENANT_ID"
+        shell: pwsh
+      
+      - name: Log in with Azure (Client Credentials)
+        if: ${{ env.AZURE_CREDENTIALS != '' }}
+        run: |
+          $info = $Env:AZURE_CREDENTIALS | ConvertFrom-Json -AsHashtable;
+          Write-Host "::add-mask::$($info.clientSecret)"
+          azd auth login `
+            --client-id "$($info.clientId)" `
+            --client-secret "$($info.clientSecret)" `
+            --tenant-id "$($info.tenantId)"
+        shell: pwsh
+        env:
+          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+      
+      - name: Pre-deployment Validation
+        run: |
+          # Add pre-deployment validation steps
+          # Example: Check for required configuration, run critical tests, etc.
+      
+      - name: Provision Production Infrastructure
+        run: |
+          # Using --no-prompt for CI/CD automated deployments
+          azd provision --no-prompt --environment production
+        env:
+          AZD_INITIAL_ENVIRONMENT_CONFIG: ${{ secrets.AZD_PROD_ENVIRONMENT_CONFIG }}
+      
+      - name: Deploy Application to Production
+        run: |
+          azd deploy --no-prompt --environment production
+      
+      - name: Health Check
+        run: |
+          # Add post-deployment health check
+          # Example: curl -f https://prod-app-url.azurewebsites.net/health
+      
+      - name: Notify Deployment Complete
+        if: success()
+        run: |
+          # Add notification logic here (Slack, Teams, email, etc.)
+          echo "Production deployment completed successfully"

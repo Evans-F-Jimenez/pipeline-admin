@@ -1,0 +1,83 @@
+name: QA Environment Deployment
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - staging
+      - release-candidate/*
+  workflow_run:
+    workflows: ["Test Environment Deployment"]
+    types:
+      - completed
+    branches:
+      - develop
+
+# Set up permissions for deploying with secretless Azure federated credentials
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy-qa:
+    runs-on: ubuntu-latest
+    environment: qa
+    # Only run if the test workflow was successful or if directly triggered
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name != 'workflow_run' }}
+    env:
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      AZURE_ENV_NAME: qa-${{ vars.AZURE_ENV_NAME }}
+      AZURE_LOCATION: ${{ vars.AZURE_LOCATION }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install azd
+        uses: Azure/setup-azd@v1.0.0
+
+      - name: Install .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: 'global.json'
+      
+      - name: Log in with Azure (Federated Credentials)
+        if: ${{ env.AZURE_CLIENT_ID != '' }}
+        run: |
+          azd auth login `
+            --client-id "$Env:AZURE_CLIENT_ID" `
+            --federated-credential-provider "github" `
+            --tenant-id "$Env:AZURE_TENANT_ID"
+        shell: pwsh
+      
+      - name: Log in with Azure (Client Credentials)
+        if: ${{ env.AZURE_CREDENTIALS != '' }}
+        run: |
+          $info = $Env:AZURE_CREDENTIALS | ConvertFrom-Json -AsHashtable;
+          Write-Host "::add-mask::$($info.clientSecret)"
+          azd auth login `
+            --client-id "$($info.clientId)" `
+            --client-secret "$($info.clientSecret)" `
+            --tenant-id "$($info.tenantId)"
+        shell: pwsh
+        env:
+          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+      
+      - name: Run Integration Tests
+        run: |
+          # Add integration test commands here
+          # Example: dotnet test --filter "Category=Integration"
+      
+      - name: Provision QA Infrastructure
+        run: azd provision --no-prompt --environment qa
+        env:
+          AZD_INITIAL_ENVIRONMENT_CONFIG: ${{ secrets.AZD_QA_ENVIRONMENT_CONFIG }}
+      
+      - name: Deploy Application to QA
+        run: azd deploy --no-prompt --environment qa
+      
+      - name: Run Smoke Tests
+        run: |
+          # Add smoke test commands here to verify deployment
+          # Example: curl https://qa-app-url.azurewebsites.net/health
